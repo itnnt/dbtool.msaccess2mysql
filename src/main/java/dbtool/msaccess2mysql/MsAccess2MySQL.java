@@ -3,19 +3,23 @@ package dbtool.msaccess2mysql;
 import java.io.IOException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 import java.util.Set;
-import util.CommonUtil;
 
 import org.apache.commons.lang.StringUtils;
 
 import com.healthmarketscience.jackcess.Column;
+import com.healthmarketscience.jackcess.DataType;
 import com.healthmarketscience.jackcess.Row;
 import com.healthmarketscience.jackcess.Table;
 
 import dbtool.msaccess2mysql.util.MsAccessConnect;
 import dbtool.msaccess2mysql.util.MySQLConnect;
+import util.CommonUtil;
 
 public class MsAccess2MySQL {
 	
@@ -41,18 +45,35 @@ public class MsAccess2MySQL {
 	
 	public MsAccess2MySQL() {
 		super();
-		// TODO Auto-generated constructor stub
+		try {
+			/* connect to source db and destination db */
+			msAccessConnect.connect();
+			mySQLConnect.connect(true);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 	}
 	
 	public void synchData() {
 		try {
-			msAccessConnect.connect();
+			
 			Set<String> tableNames = msAccessConnect.getTableNames();
 			for (String t: tableNames) {
-				System.out.println(t);
+				System.out.println("Processing table " + t + "-----------------");
+//				System.out.println(t);
 				if (util.removeSpecialChar(t).equals("agentlist")) {
-					System.out.println("+++++++++++++++++++++");
-					createOrAlterTableThenTruncateBeforeInsert(t);
+					createOrAlterTableThenTruncateBeforeInsert(t, "raw_" + util.removeSpecialChar(t) + "_profile",
+							Arrays.asList(new String[] {}), 
+							Arrays.asList(new String[] {"regioncd", "region_name", "regionheadcd", "region_head_name", "zonecd", "zone_name", "zone_head_cd", "zone_head_name", "teamcd", "team_name", "teamheadcd", "team_head_name", "officecd", "office_name", "officeheadcd", "officeheadname", "bmcd", "bm_name", "branchcd", "branch_name", "umcd", "um_name", "unitcd", "unit_name"}));
+					createOrAlterTableThenTruncateBeforeInsert(t, "raw_" + util.removeSpecialChar(t) + "_hierarchy",
+							Arrays.asList(new String[] {"mastercd", "agentcd", "regioncd", "region_name", "regionheadcd", "region_head_name", "zonecd", "zone_name", "zone_head_cd", "zone_head_name", "teamcd", "team_name", "teamheadcd", "team_head_name", "officecd", "office_name", "officeheadcd", "officeheadname", "bmcd", "bm_name", "branchcd", "branch_name", "umcd", "um_name", "unitcd", "unit_name"}),
+							Arrays.asList(new String[] {})
+							);
+
+				} else {
+					createOrAlterTableThenTruncateBeforeInsert(t, "raw_" + util.removeSpecialChar(t) + "",
+							Arrays.asList(new String[] {}), 
+							Arrays.asList(new String[] {}));
 				}
 			}
 		} catch (Exception e) {
@@ -66,14 +87,11 @@ public class MsAccess2MySQL {
 	 * TRUNCATE add the data from the destination table
 	 * Copy data from the source table to the destination table
 	 */
-	public void createOrAlterTableThenTruncateBeforeInsert(String tablename) {
+	public void createOrAlterTableThenTruncateBeforeInsert(String accessTablename, String mySqlTablename, List<String> includedFields, List<String> excludedFields) {
 		try {
-			/* connect to source db and destination db */
-			msAccessConnect.connect();
-			mySQLConnect.connect(false);
-			
 			/* get data from the access table */
-			Table tbl = msAccessConnect.getTable(tablename);
+			Table tbl = msAccessConnect.getTable(accessTablename);
+			/* the 4 list below have to be the same position of each column */
 			List<String> colNameColTypePairs =  new ArrayList<String>();
 			List<String> colNames =  new ArrayList<String>();
 			List<String> simpleColNames =  new ArrayList<String>();
@@ -81,17 +99,19 @@ public class MsAccess2MySQL {
 			/* get columns' names and columns' types */
 			for (Column column : tbl.getColumns()) {
 				String columnName = util.removeSpecialChar(column.getName());
-//				System.out.println("`" + columnName + "`" + "\t" + column.getType() );
-				colNameColTypePairs.add("`" + columnName + "`" + "\t" + TypeMapping.valueOf(column.getType().toString()).mySqlType);
-				colNames.add("`" + columnName + "`");
-				simpleColNames.add(columnName);
-				originalColNames.add(column.getName());
+				if (includedFields.contains(columnName) || !excludedFields.contains(columnName)) {
+//					 System.out.println("`" + columnName + "`" + "\t" + column.getType() );
+					colNameColTypePairs.add("`" + columnName + "`" + "\t" + TypeMapping.valueOf(column.getType().toString()).mySqlType);
+					colNames.add("`" + columnName + "`");
+					simpleColNames.add(columnName);
+					originalColNames.add(column.getName());
+				}
 			}
 			
 			/* check if the table is exist */
-			if (mySQLConnect.isTableExist("raw_" + util.removeSpecialChar(tablename))) {
+			if (mySQLConnect.isTableExist(mySqlTablename)) {
 				/* get columns' names from the exist table */
-				ResultSet rs = mySQLConnect.getColumns("raw_" + util.removeSpecialChar(tablename));
+				ResultSet rs = mySQLConnect.getColumns(mySqlTablename);
 				List<String> colNamesFromTheExistTable = new ArrayList<String>();
 				while (rs.next()) {
 					colNamesFromTheExistTable.add(rs.getString("COLUMN_NAME"));
@@ -100,38 +120,50 @@ public class MsAccess2MySQL {
 				List<String> addedColumns = new ArrayList<String>(simpleColNames);
 				addedColumns.removeAll( colNamesFromTheExistTable );
 				for (String s : addedColumns) {
-					System.out.println("Alter the table " + tablename + ": add columns " + s);
+					System.out.println("Alter the table " + accessTablename + ": add columns " + s);
 					/* alter the table so that it can be added the new columns */
 					for (int i=0; i< simpleColNames.size(); i++) {
 						/* find the position of the new columns in the list */
 						if (simpleColNames.get(i).equals(s)) {
-							mySQLConnect.addColumn("raw_" + util.removeSpecialChar(tablename), colNameColTypePairs.get(i));
+							mySQLConnect.addColumn(mySqlTablename, colNameColTypePairs.get(i));
 						}
 					}
 				}
 			} else {
 				/* create new table in mysql db if the table is not exist */
-				mySQLConnect.createTable("raw_" + util.removeSpecialChar(tablename), StringUtils.join(colNameColTypePairs, ","));
+				mySQLConnect.createTable(mySqlTablename, StringUtils.join(colNameColTypePairs, ","));
 			}
 			/* truncate data before inserting */
-			mySQLConnect.truncate("raw_" + util.removeSpecialChar(tablename));
+			mySQLConnect.truncate(mySqlTablename);
 			/* get values and values' type, cook it: (v1,v2,v3),(v4,v5,v6)... */
 			List<String> values = new ArrayList<String>();
 			for (Row row : tbl) {
 				List<String> tem = new ArrayList<String>();
-					for (Column column : tbl.getColumns()) {
-						String columnName = column.getName();
-						Object value = row.get(columnName);
-						if (value == null) {
-							tem.add("null");
-						} else {
-							if (value instanceof java.lang.String) {
-								tem.add("'" + value + "'");
-							} else {
-								tem.add(value.toString());
-							}
+				for (String columnName : originalColNames) {
+					Column column = tbl.getColumn(columnName);
+					Object value = row.get(columnName);
+					if (value == null) {
+						tem.add("null");
+					} else if (value instanceof java.lang.String) {
+						if (((java.lang.String) value).contains("'")) {
+							value = ((java.lang.String) value).replace("'", "''");
 						}
+						if (((java.lang.String) value).contains("\\")) {
+							value = ((java.lang.String) value).replace("\\", "\\\\");
+						}
+						tem.add("'" + value + "'");
+					} else if (column.getType() == DataType.SHORT_DATE_TIME) {
+						/* remove ICT from the string before converting */
+						String temDate = value.toString();
+						temDate = temDate.replace("ICT ", "");
+						SimpleDateFormat dateFormat = new SimpleDateFormat("EEE MMM dd HH:mm:ss yyyy");
+						Date temDateVal = dateFormat.parse(temDate);
+						SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd");
+						tem.add("'" + df.format(temDateVal) + "'");
+					} else {
+						tem.add(value.toString());
 					}
+				}
 				String join = StringUtils.join(tem, ",");
 				values.add("(" + join + ")");
 			}
@@ -144,29 +176,24 @@ public class MsAccess2MySQL {
 				rowIndex++;
 				/* insert each time 1000 rows */
 				if (rowIndex % 1000 == 0 || rowIndex == values.size()) {
-					mySQLConnect.insert("raw_" + util.removeSpecialChar(tablename), StringUtils.join(colNames, ","), StringUtils.join(batchValues, ","));
+					mySQLConnect.insert(mySqlTablename, StringUtils.join(colNames, ","), StringUtils.join(batchValues, ","));
 					batchValues = new ArrayList<String>();
 				}	
 			}
-			mySQLConnect.commit();
 		} catch (Exception e) {
-			try {
-				mySQLConnect.rollback();
-				System.out.println("Rollback the table!!!!");
-			} catch (SQLException e1) {
-				e1.printStackTrace();
-			}
 			e.printStackTrace();
 		} finally {
-			try {
-				msAccessConnect.close();
-				mySQLConnect.close();
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
 		}
 	}
 	
+	public void closeAllConnections () {
+		try {
+			msAccessConnect.close();
+			mySQLConnect.close();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
 	
 	public void mappingTables() {
 		MsAccessConnect msAccessConnect = new MsAccessConnect("D:\\Data\\DA_201712\\KPI_PRODUCTION_20171231.accdb");
